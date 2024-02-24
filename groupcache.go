@@ -32,10 +32,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	pb "github.com/mailgun/groupcache/v2/groupcachepb"
-	"github.com/mailgun/groupcache/v2/lru"
-	"github.com/mailgun/groupcache/v2/singleflight"
 	"github.com/sirupsen/logrus"
+	pb "github.com/xdbbe/groupcache/v2/groupcachepb"
+	"github.com/xdbbe/groupcache/v2/lru"
+	"github.com/xdbbe/groupcache/v2/singleflight"
 )
 
 var logger Logger
@@ -264,7 +264,7 @@ func (g *Group) Get(ctx context.Context, key string, dest Sink) error {
 	return setSinkView(dest, value)
 }
 
-func (g *Group) Set(ctx context.Context, key string, value []byte, expire time.Time, hotCache bool) error {
+func (g *Group) Set(ctx context.Context, key string, value []byte, hotCache bool) error {
 	g.peersOnce.Do(g.initPeers)
 
 	if key == "" {
@@ -275,18 +275,18 @@ func (g *Group) Set(ctx context.Context, key string, value []byte, expire time.T
 		// If remote peer owns this key
 		owner, ok := g.peers.PickPeer(key)
 		if ok {
-			if err := g.setFromPeer(ctx, owner, key, value, expire); err != nil {
+			if err := g.setFromPeer(ctx, owner, key, value); err != nil {
 				return nil, err
 			}
 			// TODO(thrawn01): Not sure if this is useful outside of tests...
 			//  maybe we should ALWAYS update the local cache?
 			if hotCache {
-				g.localSet(key, value, expire, &g.hotCache)
+				g.localSet(key, value, &g.hotCache)
 			}
 			return nil, nil
 		}
 		// We own this key
-		g.localSet(key, value, expire, &g.mainCache)
+		g.localSet(key, value, &g.mainCache)
 		return nil, nil
 	})
 	return err
@@ -458,31 +458,18 @@ func (g *Group) getFromPeer(ctx context.Context, peer ProtoGetter, key string) (
 		return ByteView{}, err
 	}
 
-	var expire time.Time
-	if res.Expire != nil && *res.Expire != 0 {
-		expire = time.Unix(*res.Expire/int64(time.Second), *res.Expire%int64(time.Second))
-		if time.Now().After(expire) {
-			return ByteView{}, errors.New("peer returned expired value")
-		}
-	}
-
-	value := ByteView{b: res.Value, e: expire}
+	value := ByteView{b: res.Value}
 
 	// Always populate the hot cache
 	g.populateCache(key, value, &g.hotCache)
 	return value, nil
 }
 
-func (g *Group) setFromPeer(ctx context.Context, peer ProtoGetter, k string, v []byte, e time.Time) error {
-	var expire int64
-	if !e.IsZero() {
-		expire = e.UnixNano()
-	}
+func (g *Group) setFromPeer(ctx context.Context, peer ProtoGetter, k string, v []byte) error {
 	req := &pb.SetRequest{
-		Expire: &expire,
-		Group:  &g.name,
-		Key:    &k,
-		Value:  v,
+		Group: &g.name,
+		Key:   &k,
+		Value: v,
 	}
 	return peer.Set(ctx, req)
 }
@@ -507,14 +494,13 @@ func (g *Group) lookupCache(key string) (value ByteView, ok bool) {
 	return
 }
 
-func (g *Group) localSet(key string, value []byte, expire time.Time, cache *cache) {
+func (g *Group) localSet(key string, value []byte, cache *cache) {
 	if g.cacheBytes <= 0 {
 		return
 	}
 
 	bv := ByteView{
 		b: value,
-		e: expire,
 	}
 
 	// Ensure no requests are in flight
@@ -587,11 +573,6 @@ func (g *Group) CacheStats(which CacheType) CacheStats {
 	}
 }
 
-// NowFunc returns the current time which is used by the LRU to
-// determine if the value has expired. This can be overridden by
-// tests to ensure items are evicted when expired.
-var NowFunc lru.NowFunc = time.Now
-
 // cache is a wrapper around an *lru.Cache that adds synchronization,
 // makes values always be ByteView, and counts the size of all keys and
 // values.
@@ -620,7 +601,6 @@ func (c *cache) add(key string, value ByteView) {
 	defer c.mu.Unlock()
 	if c.lru == nil {
 		c.lru = &lru.Cache{
-			Now: NowFunc,
 			OnEvicted: func(key lru.Key, value interface{}) {
 				val := value.(ByteView)
 				c.nbytes -= int64(len(key.(string))) + int64(val.Len())
@@ -628,7 +608,7 @@ func (c *cache) add(key string, value ByteView) {
 			},
 		}
 	}
-	c.lru.Add(key, value, value.Expire())
+	c.lru.Add(key, value)
 	c.nbytes += int64(len(key)) + int64(value.Len())
 }
 

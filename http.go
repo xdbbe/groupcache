@@ -27,11 +27,10 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/mailgun/groupcache/v2/consistenthash"
-	pb "github.com/mailgun/groupcache/v2/groupcachepb"
+	"github.com/xdbbe/groupcache/v2/consistenthash"
+	pb "github.com/xdbbe/groupcache/v2/groupcachepb"
 )
 
 const defaultBasePath = "/_groupcache/"
@@ -212,12 +211,7 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		var expire time.Time
-		if out.Expire != nil && *out.Expire != 0 {
-			expire = time.Unix(*out.Expire/int64(time.Second), *out.Expire%int64(time.Second))
-		}
-
-		group.localSet(*out.Key, out.Value, expire, &group.mainCache)
+		group.localSet(*out.Key, out.Value, &group.mainCache)
 		return
 	}
 
@@ -234,18 +228,8 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	view, err := value.view()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	var expireNano int64
-	if !view.e.IsZero() {
-		expireNano = view.Expire().UnixNano()
-	}
-
 	// Write the value to the response body as a proto message.
-	body, err := proto.Marshal(&pb.GetResponse{Value: b, Expire: &expireNano})
+	body, err := proto.Marshal(&pb.GetResponse{Value: b})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

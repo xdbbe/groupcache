@@ -17,12 +17,7 @@ limitations under the License.
 // Package lru implements an LRU cache.
 package lru
 
-import (
-	"container/list"
-	"time"
-)
-
-type NowFunc func() time.Time
+import "container/list"
 
 // Cache is an LRU cache. It is not safe for concurrent access.
 type Cache struct {
@@ -34,11 +29,7 @@ type Cache struct {
 	// executed when an entry is purged from the cache.
 	OnEvicted func(key Key, value interface{})
 
-	// Now is the Now() function the cache will use to determine
-	// the current time which is used to calculate expired values
-	// Defaults to time.Now()
-	Now NowFunc
-
+	ptr   *list.Element
 	ll    *list.List
 	cache map[interface{}]*list.Element
 }
@@ -47,9 +38,9 @@ type Cache struct {
 type Key interface{}
 
 type entry struct {
-	key    Key
-	value  interface{}
-	expire time.Time
+	key     Key
+	visited bool
+	value   interface{}
 }
 
 // New creates a new Cache.
@@ -58,29 +49,25 @@ type entry struct {
 func New(maxEntries int) *Cache {
 	return &Cache{
 		MaxEntries: maxEntries,
+		ptr:        nil,
 		ll:         list.New(),
 		cache:      make(map[interface{}]*list.Element),
-		Now:        time.Now,
 	}
 }
 
 // Add adds a value to the cache.
-func (c *Cache) Add(key Key, value interface{}, expire time.Time) {
+func (c *Cache) Add(key Key, value interface{}) {
 	if c.cache == nil {
 		c.cache = make(map[interface{}]*list.Element)
 		c.ll = list.New()
+		c.ptr = nil
 	}
 	if ee, ok := c.cache[key]; ok {
-		eee := ee.Value.(*entry)
-		if c.OnEvicted != nil {
-			c.OnEvicted(key, eee.value)
-		}
-		c.ll.MoveToFront(ee)
-		eee.expire = expire
-		eee.value = value
+		ee.Value.(*entry).visited = true
+		ee.Value.(*entry).value = value
 		return
 	}
-	ele := c.ll.PushFront(&entry{key, value, expire})
+	ele := c.ll.PushFront(&entry{key, false, value})
 	c.cache[key] = ele
 	if c.MaxEntries != 0 && c.ll.Len() > c.MaxEntries {
 		c.RemoveOldest()
@@ -93,15 +80,8 @@ func (c *Cache) Get(key Key) (value interface{}, ok bool) {
 		return
 	}
 	if ele, hit := c.cache[key]; hit {
-		entry := ele.Value.(*entry)
-		// If the entry has expired, remove it from the cache
-		if !entry.expire.IsZero() && entry.expire.Before(c.Now()) {
-			c.removeElement(ele)
-			return nil, false
-		}
-
-		c.ll.MoveToFront(ele)
-		return entry.value, true
+		ele.Value.(*entry).visited = true
+		return ele.Value.(*entry).value, true
 	}
 	return
 }
@@ -121,10 +101,19 @@ func (c *Cache) RemoveOldest() {
 	if c.cache == nil {
 		return
 	}
-	ele := c.ll.Back()
-	if ele != nil {
-		c.removeElement(ele)
+	ele := c.ptr
+	if ele == nil {
+		ele = c.ll.Back()
 	}
+	for ele != nil && ele.Value.(*entry).visited {
+		ele.Value.(*entry).visited = false
+		ele = ele.Prev()
+	}
+	if ele == nil {
+		println("Error: RemoveOldest cannot find element")
+	}
+	c.ptr = ele.Prev()
+	c.removeElement(ele)
 }
 
 func (c *Cache) removeElement(e *list.Element) {

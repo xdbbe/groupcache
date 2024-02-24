@@ -2,18 +2,20 @@
 
 A modified version of [group cache](https://github.com/golang/groupcache) with
 support for `context.Context`, [go modules](https://github.com/golang/go/wiki/Modules),
-and explicit key removal and expiration. See the `CHANGELOG` for a complete list of 
-modifications.
+and explicit key removal taken from [mailgun's fork](https://github.com/mailgun/groupcache). See the `CHANGELOG` for a complete list of 
+modifications done by mailgun.
 
 ## Summary
 
 groupcache is a caching and cache-filling library, intended as a
 replacement for memcached in many cases.
 
-For API docs and examples, see http://godoc.org/github.com/mailgun/groupcache/v2
-
    
 ### Modifications from original library
+
+* Replace Mailgun's weird md5 + fnv1 hashing with XXH3
+
+* Use [SIEVE patch](https://github.com/cacheMon/groupcache) instead of LRU
 
 * Support for explicit key removal from a group. `Remove()` requests are 
   first sent to the peer who owns the key, then the remove request is 
@@ -23,14 +25,6 @@ For API docs and examples, see http://godoc.org/github.com/mailgun/groupcache/v2
   is very rare and the system remains very consistent. In case of an
   inconsistency placing a expiration time on your values will ensure the 
   cluster eventually becomes consistent again.
-
-* Support for expired values. `SetBytes()`, `SetProto()` and `SetString()` now
-  accept an optional `time.Time` which represents a time in the future when the
-  value will expire. If you don't want expiration, pass the zero value for
-  `time.Time` (for instance, `time.Time{}`). Expiration is handled by the LRU Cache
-  when a `Get()` on a key is requested. This means no network coordination of
-  expired values is needed. However this does require that time on all nodes in the
-  cluster is synchronized for consistent expiration of values.
 
 * Now always populating the hotcache. A more complex algorithm is unnecessary
   when the LRU cache will ensure the most used values remain in the cache. The

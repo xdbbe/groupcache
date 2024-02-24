@@ -18,12 +18,10 @@ limitations under the License.
 package consistenthash
 
 import (
-	"crypto/md5"
-	"fmt"
 	"sort"
 	"strconv"
 
-	"github.com/segmentio/fasthash/fnv1"
+	"github.com/zeebo/xxh3"
 )
 
 type Hash func(data []byte) uint64
@@ -42,7 +40,7 @@ func New(replicas int, fn Hash) *Map {
 		hashMap:  make(map[int]string),
 	}
 	if m.hash == nil {
-		m.hash = fnv1.HashBytes64
+		m.hash = xxh3.Hash
 	}
 	return m
 }
@@ -56,7 +54,7 @@ func (m *Map) IsEmpty() bool {
 func (m *Map) Add(keys ...string) {
 	for _, key := range keys {
 		for i := 0; i < m.replicas; i++ {
-			hash := int(m.hash([]byte(fmt.Sprintf("%x", md5.Sum([]byte(strconv.Itoa(i)+key))))))
+			hash := int(m.hash([]byte(strconv.Itoa(i) + key)))
 			m.keys = append(m.keys, hash)
 			m.hashMap[hash] = key
 		}

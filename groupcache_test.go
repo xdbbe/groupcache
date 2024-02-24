@@ -30,9 +30,8 @@ import (
 	"unsafe"
 
 	"github.com/golang/protobuf/proto"
-	pb "github.com/mailgun/groupcache/v2/groupcachepb"
-	"github.com/mailgun/groupcache/v2/testpb"
-	"github.com/stretchr/testify/assert"
+	pb "github.com/xdbbe/groupcache/v2/groupcachepb"
+	"github.com/xdbbe/groupcache/v2/testpb"
 )
 
 var (
@@ -64,7 +63,7 @@ func testSetup() {
 			key = <-stringc
 		}
 		cacheFills.Add(1)
-		return dest.SetString("ECHO:"+key, time.Time{})
+		return dest.SetString("ECHO:" + key)
 	}))
 
 	protoGroup = NewGroup(protoGroupName, cacheSize, GetterFunc(func(_ context.Context, key string, dest Sink) error {
@@ -75,12 +74,12 @@ func testSetup() {
 		return dest.SetProto(&testpb.TestMessage{
 			Name: proto.String("ECHO:" + key),
 			City: proto.String("SOME-CITY"),
-		}, time.Time{})
+		})
 	}))
 
 	expireGroup = NewGroup(expireGroupName, cacheSize, GetterFunc(func(_ context.Context, key string, dest Sink) error {
 		cacheFills.Add(1)
-		return dest.SetString("ECHO:"+key, time.Now().Add(time.Millisecond*100))
+		return dest.SetString("ECHO:" + key)
 	}))
 }
 
@@ -191,64 +190,6 @@ func TestCaching(t *testing.T) {
 	}
 }
 
-func TestCachingExpire(t *testing.T) {
-	once.Do(testSetup)
-	fills := countFills(func() {
-		for i := 0; i < 3; i++ {
-			var s string
-			if err := expireGroup.Get(dummyCtx, "TestCachingExpire-key", StringSink(&s)); err != nil {
-				t.Fatal(err)
-			}
-			if i == 1 {
-				time.Sleep(time.Millisecond * 150)
-			}
-		}
-	})
-	if fills != 2 {
-		t.Errorf("expected 2 cache fill; got %d", fills)
-	}
-}
-
-func TestCacheEviction(t *testing.T) {
-	once.Do(testSetup)
-	testKey := "TestCacheEviction-key"
-	getTestKey := func() {
-		var res string
-		for i := 0; i < 10; i++ {
-			if err := stringGroup.Get(dummyCtx, testKey, StringSink(&res)); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	fills := countFills(getTestKey)
-	if fills != 1 {
-		t.Fatalf("expected 1 cache fill; got %d", fills)
-	}
-
-	g := stringGroup.(*Group)
-	evict0 := g.mainCache.nevict
-
-	// Trash the cache with other keys.
-	var bytesFlooded int64
-	// cacheSize/len(testKey) is approximate
-	for bytesFlooded < cacheSize+1024 {
-		var res string
-		key := fmt.Sprintf("dummy-key-%d", bytesFlooded)
-		stringGroup.Get(dummyCtx, key, StringSink(&res))
-		bytesFlooded += int64(len(key) + len(res))
-	}
-	evicts := g.mainCache.nevict - evict0
-	if evicts <= 0 {
-		t.Errorf("evicts = %v; want more than 0", evicts)
-	}
-
-	// Test that the key is gone.
-	fills = countFills(getTestKey)
-	if fills != 1 {
-		t.Fatalf("expected 1 cache fill after cache trashing; got %d", fills)
-	}
-}
-
 type fakePeer struct {
 	hits int
 	fail bool
@@ -308,7 +249,7 @@ func TestPeers(t *testing.T) {
 	localHits := 0
 	getter := func(_ context.Context, key string, dest Sink) error {
 		localHits++
-		return dest.SetString("got:"+key, time.Time{})
+		return dest.SetString("got:" + key)
 	}
 	testGroup := newGroup("TestPeers-group", cacheSize, GetterFunc(getter), peerList)
 	run := func(name string, n int, wantSummary string) {
@@ -392,7 +333,7 @@ func TestAllocatingByteSliceTarget(t *testing.T) {
 	sink := AllocatingByteSliceSink(&dst)
 
 	inBytes := []byte("some bytes")
-	sink.SetBytes(inBytes, time.Time{})
+	sink.SetBytes(inBytes)
 	if want := "some bytes"; string(dst) != want {
 		t.Errorf("SetBytes resulted in %q; want %q", dst, want)
 	}
@@ -439,7 +380,7 @@ func TestNoDedup(t *testing.T) {
 	const testkey = "testkey"
 	const testval = "testval"
 	g := newGroup("testgroup", 1024, GetterFunc(func(_ context.Context, key string, dest Sink) error {
-		return dest.SetString(testval, time.Time{})
+		return dest.SetString(testval)
 	}), nil)
 
 	orderedGroup := &orderedFlightGroup{
@@ -520,7 +461,7 @@ func TestContextDeadlineOnPeer(t *testing.T) {
 	peer2 := &slowPeer{}
 	peerList := fakePeers([]ProtoGetter{peer0, peer1, peer2, nil})
 	getter := func(_ context.Context, key string, dest Sink) error {
-		return dest.SetString("got:"+key, time.Time{})
+		return dest.SetString("got:" + key)
 	}
 	testGroup := newGroup("TestContextDeadlineOnPeer-group", cacheSize, GetterFunc(getter), peerList)
 
@@ -534,107 +475,4 @@ func TestContextDeadlineOnPeer(t *testing.T) {
 			t.Errorf("expected Get to return context deadline exceeded")
 		}
 	}
-}
-
-func TestEnsureSizeReportedCorrectly(t *testing.T) {
-	c := &cache{}
-
-	// Add the first value
-	bv1 := ByteView{s: "first", e: time.Now().Add(100 * time.Second)}
-	c.add("key1", bv1)
-	v, ok := c.get("key1")
-
-	// Should be len("key1" + "first") == 9
-	assert.True(t, ok)
-	assert.True(t, v.Equal(bv1))
-	assert.Equal(t, int64(9), c.bytes())
-
-	// Add a second value
-	bv2 := ByteView{s: "second", e: time.Now().Add(200 * time.Second)}
-
-	c.add("key2", bv2)
-	v, ok = c.get("key2")
-
-	// Should be len("key2" + "second") == (10 + 9) == 19
-	assert.True(t, ok)
-	assert.True(t, v.Equal(bv2))
-	assert.Equal(t, int64(19), c.bytes())
-
-	// Replace the first value with a shorter value
-	bv3 := ByteView{s: "3", e: time.Now().Add(200 * time.Second)}
-
-	c.add("key1", bv3)
-	v, ok = c.get("key1")
-
-	// len("key1" + "3") == 5
-	// len("key2" + "second") == 10
-	assert.True(t, ok)
-	assert.True(t, v.Equal(bv3))
-	assert.Equal(t, int64(15), c.bytes())
-
-	// Replace the second value with a longer value
-	bv4 := ByteView{s: "this-string-is-28-chars-long", e: time.Now().Add(200 * time.Second)}
-
-	c.add("key2", bv4)
-	v, ok = c.get("key2")
-
-	// len("key1" + "3") == 5
-	// len("key2" + "this-string-is-28-chars-long") == 32
-	assert.True(t, ok)
-	assert.True(t, v.Equal(bv4))
-	assert.Equal(t, int64(37), c.bytes())
-}
-
-func TestEnsureUpdateExpiredValue(t *testing.T) {
-	c := &cache{}
-	curTime := time.Now()
-
-	// Override the now function so we control time
-	NowFunc = func() time.Time {
-		return curTime
-	}
-
-	// Expires in 1 second
-	c.add("key1", ByteView{s: "value1", e: curTime.Add(time.Second)})
-	_, ok := c.get("key1")
-	assert.True(t, ok)
-
-	// Advance 1.1 seconds into the future
-	curTime = curTime.Add(time.Millisecond * 1100)
-
-	// Value should have expired
-	_, ok = c.get("key1")
-	assert.False(t, ok)
-
-	// Add a new key that expires in 1 second
-	c.add("key2", ByteView{s: "value2", e: curTime.Add(time.Second)})
-	_, ok = c.get("key2")
-	assert.True(t, ok)
-
-	// Advance 0.5 seconds into the future
-	curTime = curTime.Add(time.Millisecond * 500)
-
-	// Value should still exist
-	_, ok = c.get("key2")
-	assert.True(t, ok)
-
-	// Replace the existing key, this should update the expired time
-	c.add("key2", ByteView{s: "updated value2", e: curTime.Add(time.Second)})
-	_, ok = c.get("key2")
-	assert.True(t, ok)
-
-	// Advance 0.6 seconds into the future, which puts us past the initial
-	// expired time for key2.
-	curTime = curTime.Add(time.Millisecond * 600)
-
-	// Should still exist
-	_, ok = c.get("key2")
-	assert.True(t, ok)
-
-	// Advance 1.1 seconds into the future
-	curTime = curTime.Add(time.Millisecond * 1100)
-
-	// Should not exist
-	_, ok = c.get("key2")
-	assert.False(t, ok)
 }
